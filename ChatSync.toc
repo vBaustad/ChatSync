@@ -4,6 +4,6 @@
 ## Author: vebjorn
 ## Version: 1.0.0
 ## SavedVariables: ChatSyncDB
-## IconTexture: Interface\Icons\INV_Letter_15
+## IconTexture: Interface\AddOns\ChatSync\ChatSync
 
 ChatSync.lua

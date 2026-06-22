@@ -11,6 +11,7 @@ local ADDON = ...
 
 local PREFIX = "|cff66ccffChatSync|r: "
 local function msg(text) print(PREFIX .. text) end
+local BMC_URL = "buymeacoffee.com/vbaustad"
 
 local NUMWIN = NUM_CHAT_WINDOWS or 10
 local SNAP_VERSION = 2   -- 2 = snapshot includes window size/position; 1/nil = older, no geometry
@@ -288,6 +289,19 @@ StaticPopupDialogs["CHATSYNC_NEWNAME"] = {
     EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
     timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
+StaticPopupDialogs["CHATSYNC_BMC"] = {
+    text = "Thanks for using Chat Sync!\nCopy the link below if you'd like to buy me a coffee.",
+    button1 = CLOSE,
+    hasEditBox = true, editBoxWidth = 260,
+    OnShow = function(self)
+        local eb = self.EditBox or self.editBox
+        if not eb then return end
+        eb:SetText(BMC_URL); eb:HighlightText(); eb:SetFocus()
+    end,
+    EditBoxOnEnterPressed = function(self) self:GetParent():Hide() end,
+    EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
+    timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+}
 
 local function Help()
     msg("commands:")
@@ -452,6 +466,27 @@ local function BuildOptions()
     emptyText = panel:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
     emptyText:SetPoint("TOPLEFT", 20, -222)
     emptyText:SetText("No profiles yet - use the button above, or type a name and Save.")
+
+    -- "Buy me a coffee" support link (WoW can't open URLs, so it pops a copyable link).
+    local coffee = CreateFrame("Button", nil, panel)
+    coffee:SetSize(24, 24); coffee:SetPoint("BOTTOMLEFT", 16, 14)
+    local ctex = coffee:CreateTexture(nil, "ARTWORK")
+    ctex:SetAllPoints(); ctex:SetTexture("Interface\\AddOns\\ChatSync\\bmc-logo"); ctex:SetAlpha(0.7)
+    local clbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    clbl:SetPoint("LEFT", coffee, "RIGHT", 6, 0); clbl:SetText("|cff888888if you want to support|r")
+    coffee:SetScript("OnEnter", function(self)
+        ctex:SetAlpha(1); clbl:SetText("|cffffc840if you want to support|r")
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Buy me a coffee", 1, 0.85, 0.2)
+        GameTooltip:AddLine(BMC_URL, 0.7, 0.7, 0.7)
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine("Click to copy the link.", 0.5, 0.5, 0.5)
+        GameTooltip:Show()
+    end)
+    coffee:SetScript("OnLeave", function()
+        ctex:SetAlpha(0.7); clbl:SetText("|cff888888if you want to support|r"); GameTooltip:Hide()
+    end)
+    coffee:SetScript("OnClick", function() StaticPopup_Show("CHATSYNC_BMC") end)
 
     RegisterPage(panel, "Chat Sync")
     panel:SetScript("OnShow", RefreshRows)

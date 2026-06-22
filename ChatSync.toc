@@ -2,7 +2,7 @@
 ## Title: Chat Sync
 ## Notes: Save your chat window layout and reuse it on other characters - account-wide profiles that auto-apply to new characters.
 ## Author: vebjorn
-## Version: 1.0.0
+## Version: 1.0.1
 ## SavedVariables: ChatSyncDB
 ## IconTexture: Interface\AddOns\ChatSync\ChatSync
 ## X-License: All Rights Reserved

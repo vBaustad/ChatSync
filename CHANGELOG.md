@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1
+
+- Added a "Buy me a coffee" support link to the settings page.
+
 ## 1.0.0
 
 - Initial release.

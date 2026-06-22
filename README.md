@@ -56,6 +56,11 @@ page or `/cs apply Main`.
 
 Drop the `ChatSync` folder into `Interface/AddOns`, or install from CurseForge.
 
+## License
+
+All rights reserved. See [LICENSE](LICENSE) — free to use in-game, but not to be
+copied, modified, or redistributed without permission.
+
 ---
 
 <p align="center"><i>Made by vebjorn.</i></p>

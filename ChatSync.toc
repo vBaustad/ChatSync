@@ -1,0 +1,9 @@
+## Interface: 11508
+## Title: Chat Sync
+## Notes: Save your chat window layout and reuse it on other characters - account-wide profiles that auto-apply to new characters.
+## Author: vebjorn
+## Version: 1.0.0
+## SavedVariables: ChatSyncDB
+## IconTexture: Interface\Icons\INV_Letter_15
+
+ChatSync.lua

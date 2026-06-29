@@ -10,6 +10,73 @@
 local ADDON = ...
 
 local PREFIX = "|cff66ccffChatSync|r: "
+
+-- Ping sounds come from two sources, merged in the picker:
+--   1. Built-in SoundKit IDs - always available; we keep only the ones that exist in this client
+--      (some SOUNDKIT constants are nil in Classic Era) and play them with PlaySound.
+--   2. LibSharedMedia-3.0's "sound" registry, if the lib is present - picks up sounds registered
+--      by other addons / sound packs and plays by file path (PlaySoundFile), which sidesteps the
+--      SoundKit-nil problem entirely.
+-- The choice is saved as a string key: a built-in short key ("tell", ...) or "lsm:<media name>".
+-- An unknown key falls back to the first available sound, so a missing lib never breaks playback.
+local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+
+local SK = SOUNDKIT or {}
+local CANDIDATE_SOUNDS = {
+    { "tell",   "Whisper chime", SK.TELL_MESSAGE },
+    { "blip",   "Tech blip",     SK.UI_BNET_TOAST },   -- the Battle.net "bloop" - electronic/techy
+    { "ping",   "Map ping",      SK.MAP_PING },
+    { "bell",   "Ready check",   SK.READY_CHECK },
+    { "raid",   "Raid warning",  SK.RAID_WARNING },
+    { "invite", "Invite ding",   SK.IG_PLAYER_INVITE },
+    { "horn",   "PvP queue",     SK.PVP_THROUGH_QUEUE },
+    { "murloc", "Murloc",        SK.MURLOC_AGGRO },
+}
+local BUILTIN_SOUNDS = {}
+for _, s in ipairs(CANDIDATE_SOUNDS) do
+    if s[3] then BUILTIN_SOUNDS[#BUILTIN_SOUNDS + 1] = { key = s[1], label = s[2], kit = s[3] } end
+end
+
+-- The ordered list shown in the picker: built-ins first, then LibSharedMedia sounds (deduped by
+-- label, "None" skipped). Rebuilt on demand so newly-registered LSM sounds appear.
+local function SoundList()
+    local out, seen = {}, {}
+    for _, s in ipairs(BUILTIN_SOUNDS) do out[#out + 1] = s; seen[s.label] = true end
+    if LSM then
+        for _, name in ipairs(LSM:List("sound")) do
+            if name ~= "None" and not seen[name] then
+                out[#out + 1] = { key = "lsm:" .. name, label = name, file = LSM:Fetch("sound", name) }
+                seen[name] = true
+            end
+        end
+    end
+    return out
+end
+
+local function FindSound(key)
+    local list = SoundList()
+    for _, s in ipairs(list) do if s.key == key then return s end end
+    return list[1]
+end
+
+-- Play a specific sound by key (picker hover/select preview + incoming messages).
+local function PlaySoundKey(key)
+    local s = FindSound(key)
+    if not s then return end
+    if s.file then PlaySoundFile(s.file, "Master")
+    elseif s.kit then PlaySound(s.kit, "Master") end
+end
+
+-- Label for the current selection (shown on the dropdown).
+local function CurrentSoundLabel()
+    local s = FindSound((ChatSyncDB and ChatSyncDB.pingSound) or "tell")
+    return s and s.label or "Whisper chime"
+end
+
+-- Play the currently-selected ping sound (incoming messages + toggle preview).
+local function PlayPing()
+    PlaySoundKey((ChatSyncDB and ChatSyncDB.pingSound) or "tell")
+end
 local function msg(text) print(PREFIX .. text) end
 local BMC_URL = "buymeacoffee.com/vbaustad"
 
@@ -145,6 +212,11 @@ local function DB()
     if ChatSyncDB.minimapShown == nil then ChatSyncDB.minimapShown = true end
     ChatSyncDB.minimapAngle = ChatSyncDB.minimapAngle or 200
     if ChatSyncDB.autoSave == nil then ChatSyncDB.autoSave = true end
+    -- Chat message pings. Whisper pings ON by default (low-frequency, important); guild/party
+    -- stay off to avoid spam. pingSound = a sound key (built-in or "lsm:<name>").
+    ChatSyncDB.ping = ChatSyncDB.ping or { whisper = true, guild = false, party = false }
+    ChatSyncDB.ping.channels = ChatSyncDB.ping.channels or {}   -- [custom channel base name] = true
+    ChatSyncDB.pingSound = ChatSyncDB.pingSound or "blip"   -- "Tech blip" (falls back if nil here)
     return ChatSyncDB
 end
 
@@ -361,15 +433,17 @@ function RefreshRows()
             r = CreateFrame("Frame", nil, panel)
             r:SetSize(540, 24)
             r.label = r:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-            r.label:SetPoint("LEFT", 4, 0); r.label:SetWidth(150); r.label:SetJustifyH("LEFT")
+            r.label:SetPoint("LEFT", 6, 0); r.label:SetWidth(196); r.label:SetJustifyH("LEFT")
+            r.label:SetWordWrap(false)   -- one line; long name+tags truncate instead of overflowing the row
+            -- Uniform, evenly-spaced action buttons (aligned across every row).
             r.apply = CreateFrame("Button", nil, r, "UIPanelButtonTemplate")
-            r.apply:SetSize(54, 20); r.apply:SetText("Apply"); r.apply:SetPoint("LEFT", 158, 0)
+            r.apply:SetSize(74, 20); r.apply:SetText("Apply"); r.apply:SetPoint("LEFT", 210, 0)
             r.def = CreateFrame("Button", nil, r, "UIPanelButtonTemplate")
-            r.def:SetSize(84, 20); r.def:SetText("Default"); r.def:SetPoint("LEFT", r.apply, "RIGHT", 6, 0)
+            r.def:SetSize(74, 20); r.def:SetText("Default"); r.def:SetPoint("LEFT", r.apply, "RIGHT", 8, 0)
             r.src = CreateFrame("Button", nil, r, "UIPanelButtonTemplate")
-            r.src:SetSize(84, 20); r.src:SetPoint("LEFT", r.def, "RIGHT", 6, 0)
+            r.src:SetSize(74, 20); r.src:SetPoint("LEFT", r.def, "RIGHT", 8, 0)
             r.del = CreateFrame("Button", nil, r, "UIPanelButtonTemplate")
-            r.del:SetSize(64, 20); r.del:SetText("Delete"); r.del:SetPoint("LEFT", r.src, "RIGHT", 6, 0)
+            r.del:SetSize(74, 20); r.del:SetText("Delete"); r.del:SetPoint("LEFT", r.src, "RIGHT", 8, 0)
             rowPool[i] = r
         end
         local mark = ""
@@ -389,7 +463,35 @@ function RefreshRows()
         r:Show()
     end
     if emptyText then emptyText:SetShown(#names == 0) end
+    -- Park the "Chat message pings" group just below the (variable-length) profile list.
+    if panel.pingGroup then
+        panel.pingGroup:ClearAllPoints()
+        panel.pingGroup:SetPoint("TOPLEFT", 16, -220 - math.max(#names, 1) * 26 - 6)
+    end
     RefreshUpdateBtn()
+end
+
+-- A taint-safe look-alike of a settings dropdown. We never use UIDropDownMenu_* (it taints the
+-- LFG browse), so this is a recessed field: the current value on the left, a down-arrow on the
+-- right, and a hover glow. Set the shown value via dd.Text:SetText(...); attach OnClick to open.
+local function MakeDropdown(parent, width)
+    local dd = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    dd:SetSize(width, 24)
+    dd:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    dd:SetBackdropColor(0.09, 0.09, 0.11, 0.95)
+    dd:SetBackdropBorderColor(0.45, 0.40, 0.32, 1)
+    local arrow = dd:CreateTexture(nil, "ARTWORK")
+    arrow:SetTexture("Interface\\ChatFrame\\UI-ChatIcon-ScrollDown-Up")
+    arrow:SetSize(16, 16); arrow:SetPoint("RIGHT", -4, 0)
+    dd.Text = dd:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    dd.Text:SetPoint("LEFT", 8, 0); dd.Text:SetPoint("RIGHT", arrow, "LEFT", -2, 0); dd.Text:SetJustifyH("LEFT")
+    dd:SetScript("OnEnter", function(self) self:SetBackdropBorderColor(0.85, 0.75, 0.45, 1) end)
+    dd:SetScript("OnLeave", function(self) self:SetBackdropBorderColor(0.45, 0.40, 0.32, 1) end)
+    return dd
 end
 
 local function BuildOptions()
@@ -407,7 +509,7 @@ local function BuildOptions()
     -- Prominent one-click save: updates the profile this character feeds (or, if it
     -- doesn't feed one yet, prompts for a name).
     updateBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    updateBtn:SetSize(320, 26); updateBtn:SetPoint("TOPLEFT", 16, -70)
+    updateBtn:SetSize(300, 26); updateBtn:SetPoint("TOPLEFT", 16, -72)
     updateBtn:SetScript("OnClick", function(self)
         if self._bound then DoSaveProfile(self._bound) else StaticPopup_Show("CHATSYNC_NEWNAME") end
     end)
@@ -417,7 +519,7 @@ local function BuildOptions()
     local modeNames = { ask = "Ask me (pick a profile)", auto = "Auto-apply default", off = "Do nothing" }
     local modeOrder = { "ask", "auto", "off" }
     local modeBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    modeBtn:SetSize(260, 22); modeBtn:SetPoint("TOPLEFT", 16, -104)
+    modeBtn:SetSize(300, 26); modeBtn:SetPoint("TOPLEFT", 16, -106)
     local function modeText() modeBtn:SetText("New character: " .. (modeNames[DB().onNewChar or "ask"])) end
     modeBtn:SetScript("OnClick", function()
         local db = DB(); local cur = db.onNewChar or "ask"; local idx = 1
@@ -427,7 +529,7 @@ local function BuildOptions()
     modeText()
 
     local mmCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-    mmCheck:SetSize(24, 24); mmCheck:SetPoint("TOPLEFT", 348, -68)
+    mmCheck:SetSize(24, 24); mmCheck:SetPoint("TOPLEFT", 360, -72)
     local mmLbl = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
     mmLbl:SetPoint("LEFT", mmCheck, "RIGHT", 2, 0); mmLbl:SetText("Minimap button")
     mmCheck:SetChecked(DB().minimapShown ~= false)
@@ -437,11 +539,160 @@ local function BuildOptions()
     end)
 
     local asCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-    asCheck:SetSize(24, 24); asCheck:SetPoint("TOPLEFT", 348, -98)
+    asCheck:SetSize(24, 24); asCheck:SetPoint("TOPLEFT", 360, -104)
     local asLbl = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
     asLbl:SetPoint("LEFT", asCheck, "RIGHT", 2, 0); asLbl:SetText("Auto-save my changes")
     asCheck:SetChecked(DB().autoSave ~= false)
     asCheck:SetScript("OnClick", function(self) DB().autoSave = self:GetChecked() and true or false end)
+
+    -- ----- Chat message pings: its own group, placed below the profile list by RefreshRows
+    -- (the list grows, so the section can't have a fixed Y). -----
+    local pingGroup = CreateFrame("Frame", nil, panel)
+    pingGroup:SetSize(540, 80)
+    panel.pingGroup = pingGroup
+
+    local pingHdr = pingGroup:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    pingHdr:SetPoint("TOPLEFT", 0, 0); pingHdr:SetText("|cffffd100Chat message pings|r")
+
+    -- Sound select: a taint-safe dropdown opening a scrollable list (hover a row to preview).
+    -- Rebuilt on open since the LibSharedMedia catalog can grow; mouse-wheel scrolls long lists.
+    local soundBtn = MakeDropdown(pingGroup, 180)
+    soundBtn:SetPoint("TOPLEFT", 4, -22)
+    local function refreshSoundBtn() soundBtn.Text:SetText("Sound: " .. CurrentSoundLabel()) end
+    refreshSoundBtn()
+    local pop, soundContent, soundRows = nil, nil, {}
+    local ROWH, MAXROWS = 18, 12
+    local function refreshSoundPop()
+        local list = SoundList()
+        for _, r in ipairs(soundRows) do r:Hide() end
+        for i, s in ipairs(list) do
+            local r = soundRows[i]
+            if not r then
+                r = CreateFrame("Button", nil, soundContent)
+                r:SetHeight(ROWH)
+                r.hl = r:CreateTexture(nil, "BACKGROUND"); r.hl:SetAllPoints(); r.hl:SetColorTexture(1, 1, 1, 0.12); r.hl:Hide()
+                -- Speaker icon: click to preview the sound WITHOUT selecting it (it's a child
+                -- button, so it consumes the click and the row's OnClick doesn't fire).
+                r.play = CreateFrame("Button", nil, r)
+                r.play:SetSize(15, 15); r.play:SetPoint("RIGHT", -5, 0)
+                local sp = r.play:CreateTexture(nil, "ARTWORK"); sp:SetAllPoints()
+                sp:SetTexture("Interface\\Common\\VoiceChat-Speaker")
+                r.play:SetScript("OnEnter", function() sp:SetVertexColor(1, 0.85, 0.3) end)
+                r.play:SetScript("OnLeave", function() sp:SetVertexColor(1, 1, 1) end)
+                r.play:SetScript("OnClick", function() PlaySoundKey(r._key) end)
+                r.fs = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                r.fs:SetPoint("LEFT", 6, 0); r.fs:SetPoint("RIGHT", r.play, "LEFT", -4, 0); r.fs:SetJustifyH("LEFT")
+                r:SetScript("OnEnter", function(self) self.hl:Show() end)
+                r:SetScript("OnLeave", function(self) self.hl:Hide() end)
+                r:SetScript("OnClick", function(self) DB().pingSound = self._key; refreshSoundBtn(); pop:Hide() end)
+                soundRows[i] = r
+            end
+            r._key = s.key; r.fs:SetText(s.label)
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", 0, -(i - 1) * ROWH); r:SetPoint("RIGHT", soundContent, "RIGHT", 0, 0)
+            r:Show()
+        end
+        local n = #list
+        soundContent:SetSize(186, math.max(1, n) * ROWH)
+        pop._sf:SetVerticalScroll(0)
+        pop:SetHeight(math.min(n, MAXROWS) * ROWH + 8)
+    end
+    soundBtn:SetScript("OnClick", function()
+        if pop and pop:IsShown() then pop:Hide(); return end
+        if not pop then
+            pop = CreateFrame("Frame", "ChatSyncSoundPopup", pingGroup, "BackdropTemplate")
+            pop:SetFrameStrata("TOOLTIP"); pop:SetWidth(196)   -- TOOLTIP so it sits above the Settings window
+            pop:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = false, edgeSize = 12,
+                insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+            pop:SetBackdropColor(0.06, 0.06, 0.08, 1)   -- fully opaque
+            tinsert(UISpecialFrames, "ChatSyncSoundPopup")   -- Escape closes
+            local sf = CreateFrame("ScrollFrame", nil, pop)
+            sf:SetPoint("TOPLEFT", 5, -4); sf:SetPoint("BOTTOMRIGHT", -5, 4)
+            soundContent = CreateFrame("Frame", nil, sf)
+            soundContent:SetSize(186, 10); sf:SetScrollChild(soundContent)
+            sf:EnableMouseWheel(true)
+            sf:SetScript("OnMouseWheel", function(self, delta)
+                local maxS = math.max(0, soundContent:GetHeight() - self:GetHeight())
+                self:SetVerticalScroll(math.min(maxS, math.max(0, self:GetVerticalScroll() - delta * ROWH * 2)))
+            end)
+            pop._sf = sf
+        end
+        refreshSoundPop()
+        pop:ClearAllPoints(); pop:SetPoint("TOPLEFT", soundBtn, "BOTTOMLEFT", 0, -2); pop:Show()
+    end)
+
+    -- Which incoming channels ping (all off by default; previews the sound when enabled).
+    local function pingToggle(x, key, label)
+        local cb = CreateFrame("CheckButton", nil, pingGroup, "UICheckButtonTemplate")
+        cb:SetSize(24, 24); cb:SetPoint("TOPLEFT", x, -22)
+        local l = pingGroup:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+        l:SetPoint("LEFT", cb, "RIGHT", 2, 0); l:SetText(label)
+        cb:SetChecked(DB().ping and DB().ping[key] == true)
+        cb:SetScript("OnClick", function(self)
+            DB().ping[key] = self:GetChecked() and true or false
+            if DB().ping[key] then PlayPing() end
+        end)
+    end
+    pingToggle(200, "whisper", "Whisper")
+    pingToggle(300, "guild",   "Guild")
+    pingToggle(380, "party",   "Party")
+
+    -- Custom channels: a multi-select dropdown of the channels you're currently in (rebuilt
+    -- each time it opens, since you join/leave channels). Stored by base name.
+    local chanBtn = MakeDropdown(pingGroup, 180)
+    chanBtn:SetPoint("TOPLEFT", 4, -50)
+    local function chanCount() local n = 0; for _ in pairs(DB().ping.channels or {}) do n = n + 1 end; return n end
+    local function refreshChanBtn()
+        local n = chanCount()
+        chanBtn.Text:SetText(n > 0 and ("Custom channels: " .. n) or "Custom channels...")
+    end
+    refreshChanBtn()
+    local chanPop, chanRows = nil, {}
+    local function refreshChanPop()
+        local list = { GetChannelList() }   -- id, name, disabled, id, name, disabled, ...
+        local names = {}
+        for i = 2, #list, 3 do
+            local nm = list[i]
+            if type(nm) == "string" and nm ~= "" then names[#names + 1] = nm end
+        end
+        for _, r in ipairs(chanRows) do r:Hide() end
+        chanPop.empty:SetShown(#names == 0)
+        for i, nm in ipairs(names) do
+            local r = chanRows[i]
+            if not r then
+                r = CreateFrame("CheckButton", nil, chanPop, "UICheckButtonTemplate")
+                r:SetSize(22, 22)
+                r.lbl = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                r.lbl:SetPoint("LEFT", r, "RIGHT", 2, 0); r.lbl:SetJustifyH("LEFT")
+                chanRows[i] = r
+            end
+            r._name = nm; r.lbl:SetText(nm)
+            r:SetChecked(DB().ping.channels[nm] == true)
+            r:SetScript("OnClick", function(self)
+                DB().ping.channels[self._name] = self:GetChecked() and true or nil
+                refreshChanBtn()
+            end)
+            r:ClearAllPoints(); r:SetPoint("TOPLEFT", 6, -4 - (i - 1) * 22); r:Show()
+        end
+        chanPop:SetSize(220, math.max(1, #names) * 22 + 10)
+    end
+    chanBtn:SetScript("OnClick", function()
+        if chanPop and chanPop:IsShown() then chanPop:Hide(); return end
+        if not chanPop then
+            chanPop = CreateFrame("Frame", "ChatSyncChanPopup", pingGroup, "BackdropTemplate")
+            chanPop:SetFrameStrata("TOOLTIP")
+            chanPop:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = false, edgeSize = 12,
+                insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+            chanPop:SetBackdropColor(0.06, 0.06, 0.08, 1)   -- fully opaque
+            chanPop.empty = chanPop:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            chanPop.empty:SetPoint("TOPLEFT", 8, -8); chanPop.empty:SetText("Not in any custom channels.")
+            tinsert(UISpecialFrames, "ChatSyncChanPopup")
+        end
+        refreshChanPop()
+        chanPop:ClearAllPoints(); chanPop:SetPoint("TOPLEFT", chanBtn, "BOTTOMLEFT", 0, -2); chanPop:Show()
+    end)
 
     local saveLbl = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
     saveLbl:SetPoint("TOPLEFT", 16, -142); saveLbl:SetText("Or save as a new profile:")
@@ -571,7 +822,11 @@ local minimapBtn
 local function PositionMinimap()
     if not minimapBtn then return end
     local angle = math.rad(DB().minimapAngle or 200)
-    minimapBtn:SetPoint("CENTER", Minimap, "CENTER", 80 * math.cos(angle), 80 * math.sin(angle))
+    -- Hug the minimap ring; scales with the minimap's actual size so the button
+    -- doesn't drift off the edge when the minimap is resized.
+    local r = (Minimap:GetWidth() / 2) + 5
+    minimapBtn:ClearAllPoints()
+    minimapBtn:SetPoint("CENTER", Minimap, "CENTER", r * math.cos(angle), r * math.sin(angle))
 end
 function EnsureMinimap()
     if not Minimap then return end
@@ -582,10 +837,12 @@ function EnsureMinimap()
         minimapBtn:RegisterForDrag("LeftButton")
         local icon = minimapBtn:CreateTexture(nil, "BACKGROUND")
         icon:SetTexture("Interface\\AddOns\\ChatSync\\ChatSync")
-        icon:SetSize(20, 20); icon:SetPoint("CENTER", 0, 1); icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        icon:SetSize(17, 17); icon:SetPoint("TOPLEFT", 7, -6); icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
         local border = minimapBtn:CreateTexture(nil, "OVERLAY")
         border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
         border:SetSize(53, 53); border:SetPoint("TOPLEFT")
+        -- Hover glow, matching Blizzard's own minimap buttons.
+        minimapBtn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
         minimapBtn:SetScript("OnDragStart", function(self)
             self:SetScript("OnUpdate", function()
                 local mx, my = Minimap:GetCenter()
@@ -616,6 +873,58 @@ function EnsureMinimap()
     minimapBtn:SetShown(DB().minimapShown ~= false)
 end
 
+-- ---------------------------------------------------------------------------
+-- "What's New": a one-time heads-up after an update, re-openable via /cs news.
+-- Bump NEWS_KEY whenever there's fresh content to surface; it shows once per key.
+-- ---------------------------------------------------------------------------
+local NEWS_KEY = "pings-1"
+local NEWS_LINES = {
+    "|cffffd100Chat message pings|r - hear a sound when a message comes in.",
+    " ",
+    "Find |cffffd100Chat message pings|r at the bottom of the settings (|cffffd100/cs|r):",
+    "  - Pick a |cffffd100sound|r and click the speaker to preview it.",
+    "  - Ping on |cffffd100Whisper / Guild / Party|r, or tick specific |cffffd100custom channels|r.",
+    " ",
+    "Whispers ping by default. Your own messages never ping, and you can turn any of it off in the same place.",
+}
+local newsFrame
+local function ShowNews()
+    if not newsFrame then
+        newsFrame = CreateFrame("Frame", "ChatSyncNews", UIParent, "BackdropTemplate")
+        newsFrame:SetWidth(470); newsFrame:SetPoint("CENTER", 0, 140); newsFrame:SetFrameStrata("DIALOG")
+        newsFrame:SetBackdrop({ bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border", tile = true, tileSize = 32, edgeSize = 32,
+            insets = { left = 11, right = 12, top = 12, bottom = 11 } })
+        newsFrame:EnableMouse(true); newsFrame:SetMovable(true); newsFrame:RegisterForDrag("LeftButton")
+        newsFrame:SetScript("OnDragStart", newsFrame.StartMoving)
+        newsFrame:SetScript("OnDragStop", newsFrame.StopMovingOrSizing)
+        tinsert(UISpecialFrames, "ChatSyncNews")   -- Escape closes
+
+        local title = newsFrame:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+        title:SetPoint("TOP", 0, -18); title:SetText("|cff66ccffChat Sync|r - What's New")
+
+        local body = newsFrame:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+        body:SetPoint("TOPLEFT", 28, -54); body:SetWidth(414)
+        body:SetJustifyH("LEFT"); body:SetSpacing(4)
+        body:SetText(table.concat(NEWS_LINES, "\n"))
+
+        -- Size the frame to the (wrapped) text, then sit the buttons just below it - so the
+        -- copy can never run through the buttons regardless of how lines wrap.
+        local h = math.max(60, body:GetStringHeight() or 60)
+        newsFrame:SetHeight(54 + h + 22 + 24 + 20)
+
+        local openBtn = CreateFrame("Button", nil, newsFrame, "UIPanelButtonTemplate")
+        openBtn:SetSize(140, 24); openBtn:SetText("Open settings")
+        openBtn:SetPoint("TOPRIGHT", body, "BOTTOM", -8, -22)
+        openBtn:SetScript("OnClick", function() newsFrame:Hide(); OpenOptions() end)
+        local okBtn = CreateFrame("Button", nil, newsFrame, "UIPanelButtonTemplate")
+        okBtn:SetSize(140, 24); okBtn:SetText("Got it")
+        okBtn:SetPoint("TOPLEFT", body, "BOTTOM", 8, -22)
+        okBtn:SetScript("OnClick", function() newsFrame:Hide() end)
+    end
+    newsFrame:Show()
+end
+
 SLASH_CHATSYNC1 = "/chatsync"
 SLASH_CHATSYNC2 = "/csync"
 SLASH_CHATSYNC3 = "/cs"
@@ -629,6 +938,7 @@ SlashCmdList["CHATSYNC"] = function(input)
     elseif cmd == "delete" or cmd == "remove" then DeleteProfile(rest)
     elseif cmd == "welcome" or cmd == "chooser" or cmd == "preview" then
         if next(DB().profiles) then ShowChooser() else msg("no profiles to choose from yet - save one first.") end
+    elseif cmd == "news" or cmd == "whatsnew" then ShowNews()
     elseif cmd == "help" then Help()
     else OpenOptions() end   -- bare /chatsync opens the settings page
 end
@@ -638,10 +948,36 @@ end
 -- created (level 1), apply the default profile. Existing characters (already seen,
 -- or above level 1) are never auto-touched.
 -- ---------------------------------------------------------------------------
+-- Incoming chat events that can trigger a ping, mapped to their toggle key. _INFORM events
+-- (your own outgoing whispers) are deliberately not registered.
+local PING_EVENT = {
+    CHAT_MSG_WHISPER = "whisper", CHAT_MSG_BN_WHISPER = "whisper",
+    CHAT_MSG_GUILD = "guild",
+    CHAT_MSG_PARTY = "party", CHAT_MSG_PARTY_LEADER = "party",
+    CHAT_MSG_RAID = "party",   CHAT_MSG_RAID_LEADER = "party",
+}
+-- True unless `sender` is you (guild/party/channel events fire for your own messages too).
+local function NotSelf(sender)
+    local me = UnitName("player")
+    return not (sender and me and Ambiguate(sender, "short") == me)
+end
 local f = CreateFrame("Frame")
 f:RegisterEvent("PLAYER_LOGIN")
 f:RegisterEvent("PLAYER_LOGOUT")
-f:SetScript("OnEvent", function(_, event)
+f:RegisterEvent("CHAT_MSG_CHANNEL")
+for ev in pairs(PING_EVENT) do f:RegisterEvent(ev) end
+f:SetScript("OnEvent", function(_, event, ...)
+    local ptype = PING_EVENT[event]
+    if ptype then
+        if ChatSyncDB and ChatSyncDB.ping and ChatSyncDB.ping[ptype] and NotSelf(select(2, ...)) then PlayPing() end
+        return
+    end
+    if event == "CHAT_MSG_CHANNEL" then
+        local chans = ChatSyncDB and ChatSyncDB.ping and ChatSyncDB.ping.channels
+        local chan = select(9, ...)   -- channel base name (the number varies per character)
+        if chans and chan and chans[chan] and NotSelf(select(2, ...)) then PlayPing() end
+        return
+    end
     if event == "PLAYER_LOGOUT" then
         -- Keep a bound profile current: re-save this character's layout into it.
         local db = ChatSyncDB
@@ -653,6 +989,11 @@ f:SetScript("OnEvent", function(_, event)
     EnsureMinimap()                       -- minimap button
     if C_Timer and C_Timer.After then C_Timer.After(5, function() suppressAutoSave = false end) end
     local db = DB()
+    -- One-time "What's New" heads-up after an update (shown once per NEWS_KEY).
+    if db.lastNews ~= NEWS_KEY then
+        db.lastNews = NEWS_KEY
+        if C_Timer and C_Timer.After then C_Timer.After(4, ShowNews) end
+    end
     local key = CharKey()
     if db.seen[key] then
         -- Known character: if a profile predates size/position support, pop a prompt
@@ -668,7 +1009,6 @@ f:SetScript("OnEvent", function(_, event)
         end
         return
     end
-    db.seen[key] = true
     db.seen[key] = true
     -- Only act on a freshly-created character (level 1) that has profiles to offer.
     if (UnitLevel("player") or 1) > 1 or not next(db.profiles) then return end

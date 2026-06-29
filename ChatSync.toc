@@ -2,9 +2,14 @@
 ## Title: Chat Sync
 ## Notes: Save your chat window layout and reuse it on other characters - account-wide profiles that auto-apply to new characters.
 ## Author: vebjorn
-## Version: 1.0.1
+## Version: 1.1.0
 ## SavedVariables: ChatSyncDB
 ## IconTexture: Interface\AddOns\ChatSync\ChatSync
 ## X-License: All Rights Reserved
+
+# Libraries (LibSharedMedia gives the shared sound catalog; soft-used, falls back if absent)
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
 
 ChatSync.lua

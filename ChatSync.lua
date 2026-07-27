@@ -139,6 +139,23 @@ end
 local function IsStale(snap) return snap and (snap.v or 1) < SNAP_VERSION end
 
 -- ---------------------------------------------------------------------------
+-- Edit Mode (Classic 1.15.9+).
+--
+-- ChatFrame1 - and only ChatFrame1 - is an Edit Mode system: PrimaryChatFrameMixin
+-- runs EditModeSystemMixin.OnSystemLoad, chat windows 2..N are plain floating
+-- frames Edit Mode never looks at. Edit Mode re-applies its own stored position
+-- and size on login and on every layout load, so anything we set on ChatFrame1
+-- gets overridden anyway - and since Edit Mode layouts are account-wide, the main
+-- window already carries across characters without our help.
+--
+-- So we leave ChatFrame1's geometry to Edit Mode where it exists. Windows 2..N
+-- still need us: their position/size is per-character (SetChatWindowSavedPosition
+-- / SetChatWindowSavedDimensions) and nothing syncs it between characters.
+local function EditModeOwnsMainChat()
+    return EditModeManagerFrame ~= nil and ChatFrame1 ~= nil and ChatFrame1.system ~= nil
+end
+
+-- ---------------------------------------------------------------------------
 -- Apply: rebuild the chat windows on this character from a snapshot.
 -- ---------------------------------------------------------------------------
 local function Apply(snap)
@@ -173,11 +190,15 @@ local function Apply(snap)
             -- Size & position. ChatFrame1 is the dock anchor - moving/sizing it moves the
             -- whole dock. Other docked tabs follow it; floating tabs get their own geometry.
             if i == 1 then
-                if w.point then
-                    cf:SetUserPlaced(true); cf:ClearAllPoints()
-                    pcall(cf.SetPoint, cf, w.point[1], UIParent, w.point[2], w.point[3], w.point[4])
+                -- Edit Mode owns the main window's geometry (and shares it account-wide
+                -- already). Only place it ourselves on clients without Edit Mode.
+                if not EditModeOwnsMainChat() then
+                    if w.point then
+                        cf:SetUserPlaced(true); cf:ClearAllPoints()
+                        pcall(cf.SetPoint, cf, w.point[1], UIParent, w.point[2], w.point[3], w.point[4])
+                    end
+                    if w.width and w.height then pcall(cf.SetSize, cf, w.width, w.height) end
                 end
-                if w.width and w.height then pcall(cf.SetSize, cf, w.width, w.height) end
             elseif w.docked then
                 pcall(FCF_DockFrame, cf)
             else
@@ -197,6 +218,13 @@ local function Apply(snap)
         if cf then pcall(FCF_SavePositionAndDimensions, cf) end
     end
     suppressAutoSave = prevSuppress
+    -- Say so rather than let it look like the profile half-failed: the main window
+    -- stays where Edit Mode put it, which is already the same on every character.
+    local w1 = snap.windows[1]
+    if EditModeOwnsMainChat() and w1 and (w1.point or w1.width) then
+        msg("main window position/size now comes from Edit Mode (shared account-wide) - "
+            .. "tabs, channels and floating windows applied as usual.")
+    end
     return true
 end
 
@@ -411,7 +439,10 @@ end
 local function RegisterPage(p, label)
     if Settings and Settings.RegisterCanvasLayoutCategory then
         local cat = Settings.RegisterCanvasLayoutCategory(p, label)
-        cat.ID = label
+        -- Do NOT overwrite cat.ID with the page label. As of 1.15.9 / 2.5.6,
+        -- Settings.OpenToCategory forwards the ID straight to the C function
+        -- C_SettingsUtil.OpenSettingsPanel(), which only accepts a number - a
+        -- string ID throws "bad argument #1 ... outside of expected range".
         Settings.RegisterAddOnCategory(cat)
         optCategory = cat
     elseif InterfaceOptions_AddCategory then
@@ -745,8 +776,16 @@ end
 
 local function OpenOptions()
     BuildOptions()
+    -- C_SettingsUtil.OpenSettingsPanel() (what Settings.OpenToCategory calls since
+    -- 1.15.9) is protected, so opening the panel from addon code during combat is
+    -- blocked. Bail out with a note instead of throwing ADDON_ACTION_BLOCKED.
+    if InCombatLockdown() then
+        msg("settings can't be opened during combat.")
+        return
+    end
     if Settings and Settings.OpenToCategory and optCategory then
-        Settings.OpenToCategory(optCategory.ID or optCategory:GetID())
+        local id = optCategory.GetID and optCategory:GetID() or optCategory.ID
+        Settings.OpenToCategory(id)
     elseif InterfaceOptionsFrame_OpenToCategory and panel then
         InterfaceOptionsFrame_OpenToCategory(panel)   -- call twice (Blizzard scroll-to bug)
         InterfaceOptionsFrame_OpenToCategory(panel)

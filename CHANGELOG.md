@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.2.0
+
+### Patch 1.15.9 brought Edit Mode to Classic
+
+- **The main chat window's position and size now come from Edit Mode.** The patch put the main
+  window under Edit Mode's control, so it overrode whatever your profile set - which is why it
+  stopped following your layout after the patch. Rather than fight it, ChatSync now leaves that
+  one window to Edit Mode. Edit Mode layouts are **shared across your whole account**, so the
+  main window already carries between characters on its own: set it once and you're done.
+- **Everything else still comes from your profile,** exactly as before - tab names, docking,
+  channels, message types, colours, transparency, font size, and the position and size of any
+  **undocked** windows. Edit Mode doesn't touch any of that.
+
+### Fixes
+
+- **Settings open again.** Clicking Settings did nothing and threw an error - 1.15.9 changed how
+  addons open their options page, and it now needs a numeric category ID rather than a name.
+- Opening settings **during combat** no longer throws a "blocked" error. The game protects the
+  options panel in combat, so ChatSync now just says to try again after the fight.
+- Updated for game version **1.15.9**.
+
 ## 1.1.0
 
 ### Chat message pings
